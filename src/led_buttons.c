@@ -38,13 +38,19 @@ static const struct gpio_dt_spec padlock_leds[] = {
 };
 
 static struct gpio_callback button_cb_data;
-extern uint8_t scanned;
-extern uint8_t input_idx;
+extern uint8_t button_input;
+extern uint8_t pressed_key;
 
-void button_pressed(const struct device *dev, struct gpio_callback *cb,
+static void button_pressed(const struct device *dev, struct gpio_callback *cb,
 		    uint32_t pins)
 {
-	scanned = 1;
+	button_input = 1;
+
+	for (size_t i = 0; i < 5; i++) {
+		if ((1 << padlock_buttons[i].pin) == pins){
+			pressed_key = i;
+		}
+	}
 }
 
 uint32_t get_padlock_buttons(void)
@@ -54,10 +60,6 @@ uint32_t get_padlock_buttons(void)
 		int val;
 
 		val = gpio_pin_get_dt(&padlock_buttons[i]);
-		if (val < 0) {
-			printk("Cannot read gpio pin");
-			return 0;
-		}
 		if (val) {
 			ret |= 1U << i;
 		}
@@ -77,25 +79,15 @@ uint8_t get_enter_status(void)
 {
 	return gpio_pin_get_dt(&padlock_buttons[ENTER_BTN1]);
 }
-int user_leds_init(void)
+void user_leds_init(void)
 {
-	int err;
-
 	for (size_t i = 0; i < ARRAY_SIZE(padlock_leds); i++) {
-		err = gpio_pin_configure_dt(&padlock_leds[i], GPIO_OUTPUT);
-		if (err) {
-			printk("Cannot configure LED gpio");
-			return err;
-		}
+		gpio_pin_configure_dt(&padlock_leds[i], GPIO_OUTPUT);
 	}
-
-	return user_set_leds_state(USER_NO_LEDS_MSK, USER_ALL_LEDS_MSK);
 }
 
-int user_buttons_init(void)
+void user_buttons_init(void)
 {
-	int err;
-
 	for (size_t i = 0; i < ARRAY_SIZE(padlock_buttons); i++) {
 		/* Enable pull resistor towards the inactive voltage. */
 		gpio_flags_t flags =
@@ -103,147 +95,71 @@ int user_buttons_init(void)
 			GPIO_PULL_UP : GPIO_PULL_DOWN;
 
 		if (i == USB_BTN7){
-			err = gpio_pin_configure_dt(&padlock_buttons[i], GPIO_INPUT);
+			gpio_pin_configure_dt(&padlock_buttons[i], GPIO_INPUT);
 		}else{
-			err = gpio_pin_configure_dt(&padlock_buttons[i], GPIO_INPUT | flags);
-		}
-
-		if (err) {
-			printk("Cannot configure button gpio");
-			return err;
+			gpio_pin_configure_dt(&padlock_buttons[i], GPIO_INPUT | flags);
 		}
 	}
 
 	uint32_t pin_mask = 0;
 
-	for (size_t i = 0; i < ARRAY_SIZE(padlock_buttons); i++) {
+	for (size_t i = 0; i < 5; i++) {
 		/* Module starts in scanning mode and will switch to
 		 * callback mode if no button is pressed.
 		 */
-		/*if (i == ENTER_BTN1){
-			err = gpio_pin_interrupt_configure_dt(&padlock_buttons[i], GPIO_INT_LEVEL_INACTIVE);
 
-			if (err != 0) {
-				printk("Error %d: failed to configure interrupt on %s pin %d\n",
-				err, padlock_buttons[i].port->name, padlock_buttons[i].pin);
-			}
-
-
-			gpio_init_callback(&button_cb_data, button_pressed, BIT(padlock_buttons[i].pin));
-			gpio_add_callback(padlock_buttons[i].port, &button_cb_data);
-		}*/
-		//else{
-			err = gpio_pin_interrupt_configure_dt(&padlock_buttons[i],
-						      GPIO_INT_DISABLE);
-			if (err) {
-				printk("Cannot disable callbacks()");
-				return err;
-			}
-		//}
-
+		gpio_pin_interrupt_configure_dt(&padlock_buttons[i], GPIO_INT_EDGE_RISING);
+		
+		
+		/*err = gpio_pin_interrupt_configure_dt(&padlock_buttons[i],
+					      GPIO_INT_DISABLE);
+		if (err) {
+			printk("Cannot disable callbacks()");
+			return err;
+		}
+		*/
 		pin_mask |= BIT(padlock_buttons[i].pin);
 		
 	}
-	return 0;
+	gpio_init_callback(&button_cb_data, button_pressed, pin_mask);
+	gpio_add_callback(padlock_buttons[0].port, &button_cb_data);
+
+	gpio_pin_interrupt_configure_dt(&padlock_buttons[5], GPIO_INT_DISABLE);
+	gpio_pin_interrupt_configure_dt(&padlock_buttons[6], GPIO_INT_DISABLE);
 }
-int user_set_leds(uint32_t leds)
+
+void user_set_led(uint8_t led_idx, uint32_t val)
 {
-	return user_set_leds_state(leds, USER_ALL_LEDS_MSK);
+	gpio_pin_set_dt(&padlock_leds[led_idx], val);
 }
 
-int user_set_leds_state(uint32_t leds_on_mask, uint32_t leds_off_mask)
-{
-	if ((leds_on_mask & ~USER_ALL_LEDS_MSK) != 0 ||
-	   (leds_off_mask & ~USER_ALL_LEDS_MSK) != 0) {
-		return -EINVAL;
-	}
-
-	for (size_t i = 0; i < ARRAY_SIZE(padlock_leds); i++) {
-		int val, err;
-
-		if (BIT(i) & leds_on_mask) {
-			val = 1;
-		} else if (BIT(i) & leds_off_mask) {
-			val = 0;
-		} else {
-			continue;
-		}
-
-		err = gpio_pin_set_dt(&padlock_leds[i], val);
-		if (err) {
-			printk("Cannot write LED gpio");
-			return err;
-		}
-	}
-
-	return 0;
-}
-
-int user_set_led(uint8_t led_idx, uint32_t val)
-{
-	int err;
-
-	if (led_idx >= ARRAY_SIZE(padlock_leds)) {
-		printk("LED index out of the range");
-		return -EINVAL;
-	}
-	err = gpio_pin_set_dt(&padlock_leds[led_idx], val);
-	if (err) {
-		printk("Cannot write LED gpio");
-	}
-	return err;
-}
-
-int user_set_led_on(uint8_t led_idx)
-{
-	return user_set_led(led_idx, 1);
-}
-
-int user_set_led_off(uint8_t led_idx)
-{
-	return user_set_led(led_idx, 0);
-}
-void user_set_led_all_off(void)
-{
-	for (size_t i = 0; i < ARRAY_SIZE(padlock_leds); i++) {
-		gpio_pin_set_dt(&padlock_leds[i], 0);
-	}
-}
 void user_close_lock(void)
 {
 	int err;
 	user_set_led(GREEN_LED2, 1);
-	err = gpio_pin_set_dt(&padlock_leds[AIN_GPIO], 1);
-	if (err) {
-		printk("Cannot write AIN gpio");
-	}
-	err = gpio_pin_set_dt(&padlock_leds[BIN_GPIO], 0);
-	if (err) {
-		printk("Cannot write AIN gpio");
-	}
-	k_sleep(K_MSEC(500));
-	err = gpio_pin_set_dt(&padlock_leds[AIN_GPIO], 0);
-	if (err) {
-		printk("Cannot write AIN gpio");
-	}
+	gpio_pin_set_dt(&padlock_leds[AIN_GPIO], 1);
+	gpio_pin_set_dt(&padlock_leds[BIN_GPIO], 0);
+	k_sleep(K_MSEC(1000));
+	gpio_pin_set_dt(&padlock_leds[AIN_GPIO], 0);
 	user_set_led(GREEN_LED2, 0);
 }
+
 void user_open_lock(void)
 {
 	int err;
 	user_set_led(GREEN_LED2, 1);
-	err = gpio_pin_set_dt(&padlock_leds[AIN_GPIO], 0);
-	if (err) {
-		printk("Cannot write AIN gpio");
-	}
-	err = gpio_pin_set_dt(&padlock_leds[BIN_GPIO], 1);
-	if (err) {
-		printk("Cannot write AIN gpio");
-	}
-	k_sleep(K_MSEC(500));
-	err = gpio_pin_set_dt(&padlock_leds[BIN_GPIO], 0);
-	if (err) {
-		printk("Cannot write AIN gpio");
-	}
+	gpio_pin_set_dt(&padlock_leds[AIN_GPIO], 0);
+	gpio_pin_set_dt(&padlock_leds[BIN_GPIO], 1);
+	k_sleep(K_MSEC(700));
+	gpio_pin_set_dt(&padlock_leds[BIN_GPIO], 0);
 	user_set_led(GREEN_LED2, 0);
+}
+
+void user_set_led_all_off(void)
+{
+	user_set_led(RED_LED1, 0);
+	user_set_led(GREEN_LED2, 0);
+	user_set_led(BLUE_LED3, 0);
+	user_set_led(WHITE_LED4, 0);
+
 }

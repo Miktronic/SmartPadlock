@@ -54,13 +54,9 @@
 			  DOWN_BTN3_MSK | RIGHT_BTN4_MSK | LEFT_BTN5_MSK | LOCK_BTN6_MSK | USB_BTN7_MSK)
 
 uint32_t get_padlock_buttons(void);
-int user_leds_init(void);
-int user_buttons_init(void);
-int user_set_leds(uint32_t leds);
-int user_set_leds_state(uint32_t leds_on_mask, uint32_t leds_off_mask);
-int user_set_led(uint8_t led_idx, uint32_t val);
-int user_set_led_on(uint8_t led_idx);
-int user_set_led_off(uint8_t led_idx);
+void user_leds_init(void);
+void user_buttons_init(void);
+void user_set_led(uint8_t led_idx, uint32_t val);
 uint8_t get_lock_status(void);
 void user_open_lock(void);
 void user_close_lock(void);

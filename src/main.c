@@ -35,7 +35,7 @@
 #define DEVICE_NAME             CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN         (sizeof(DEVICE_NAME) - 1)
 				
-#define RUN_LED_BLINK_INTERVAL  500
+#define RUN_LED_BLINK_INTERVAL  300
 
 #define KEY_ID 1
 
@@ -46,7 +46,7 @@ static uint32_t lock_status = 0x00;
 static uint8_t pre_lock_status = 0x00;
 static uint8_t cmd_status = 0x00;
 static uint8_t timeout = 0x00;
-static uint8_t bt_buf[8] = {0x00};
+static uint8_t bt_buf[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 static uint8_t key_array[6] = {0x01, 0x02, 0x03, 0x04, 0x01, 0x02};
 static uint8_t xor_array[6] = {0x73, 0x74, 0x65, 0x76, 0x65, 0x65};
 
@@ -63,6 +63,9 @@ uint8_t led_blink = 0;
 uint8_t scanned = 0;
 uint8_t scanned_timeout = 0;
 uint8_t charging = 0;
+uint8_t pressed_key = 0x00;
+uint8_t usb_detect = 0;
+
 #define KEY_LEN			(sizeof(key_array) - 2)
 #define NVS_PARTITION		storage_partition
 #define NVS_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(NVS_PARTITION)
@@ -212,8 +215,19 @@ static int init_nvs(void){
 
 void button_scan(void)
 {
-	uint32_t key_status = get_padlock_buttons();
-	
+	if(button_input == 1)
+	{
+		user_set_led(BLUE_LED3, 1);
+		if(pressed_key == ENTER_BTN1){		
+			input_idx = 0;
+		}
+		else{
+			key_buf[input_idx] = pressed_key;
+			input_idx = input_idx + 1;	
+		}
+		button_input = 0;
+	}
+
 	if (input_idx == 6){
 		if ((key_buf[0] = key_array[0]) && (key_buf[1] == key_array[1]) && (key_buf[2] == key_array[2]) && 
 			(key_buf[3] == key_array[3]) && (key_buf[4] == key_array[4]) && (key_buf[5] == key_array[5]))
@@ -226,7 +240,6 @@ void button_scan(void)
 		}
 		input_idx = 0;
 		button_input = 0;
-		scanned_timeout = 0;
 		key_buf[0] = 0x00;
 		key_buf[1] = 0x00;
 		key_buf[2] = 0x00;
@@ -235,93 +248,25 @@ void button_scan(void)
 		key_buf[5] = 0x00;	
 	}
 
-	if(button_input == 1){
-		scanned_timeout = scanned_timeout + 1;
-		if(scanned_timeout > 100){
-			button_input = 0;
-			scanned_timeout = 0;
-		}
-		if(key_status & UP_BTN2_MSK) { 
-			user_set_led(BLUE_LED3, 1);
-
-			key_buf[input_idx] = UP_BTN2; 
-			input_idx++;	
-		}
-		else if(key_status & DOWN_BTN3_MSK){
-			user_set_led(BLUE_LED3, 1);
-			key_buf[input_idx] = DOWN_BTN3;
-			input_idx++;
-
-		}
-		else if(key_status & RIGHT_BTN4_MSK){
-			user_set_led(BLUE_LED3, 1);
-			key_buf[input_idx] = RIGHT_BTN4;
-			input_idx++;
-
-		}
-		else if(key_status & LEFT_BTN5_MSK){
-			user_set_led(BLUE_LED3, 1);
-			key_buf[input_idx] = LEFT_BTN5;
-			input_idx++;
-
-		}
-	}
-
-	if(key_status & ENTER_BTN1_MSK){
-		user_set_led(BLUE_LED3, 1);
-	
-		button_input = 1;
-		input_idx = 0;
-		scanned_timeout = 0;
-	}
-
-	lock_status = (key_status & LOCK_BTN6_MSK) >> LOCK_BTN6;
+	lock_status =  get_lock_status();
 }
-
 int main(void)
 {
 	int err;
 
 	err = init_nvs();	
-	if (err) {
-		printk("NVS init failed (err %d)\n", err);
-		return 0;
-	}
-
 	err = battery_setup();
-
-	if (err) {
-		printk("Failed set up battery: %d\n", err);
-		return 0;
-	}
-
 	err = battery_measure_enable(true);
-	if (err) {
-		printk("Failed initialize battery measurement: %d\n", err);
-		return 0;
-	}
-
 	// read the KEY
 	err = nvs_read(&fs, KEY_ID, &key_array, sizeof(key_array));
 	if (err > 0) { /* item was found, show it */
 		printk("Id: %d, Address: %s\n", KEY_ID, key_array);
 	} else   {/* item was not found, add it */
-		printk("No address found, adding %s at id %d\n", key_array,
-		       KEY_ID);
 		(void)nvs_write(&fs, KEY_ID, &key_array, strlen(key_array));
 	}
 
-	err = user_leds_init();
-	if (err) {
-		printk("LEDs init failed (err %d)\n", err);
-		return 0;
-	}
-
-	err = user_buttons_init();
-	if (err) {
-		printk("Button init failed (err %d)\n", err);
-		return 0;
-	}
+	user_leds_init();
+	user_buttons_init();
 
 	if (IS_ENABLED(CONFIG_BT_LBS_SECURITY_ENABLED)) {
 		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
@@ -394,9 +339,6 @@ int main(void)
 				bt_buf[6] = 0x00;
 				bt_buf[7] = 0x00;
 			}
-
-
-
 			//If updating the key...
 			if((bt_buf[0] == 0x55) && (bt_buf[7] == 0xBB)){
 
@@ -445,32 +387,38 @@ int main(void)
 		
 		// if open command...
 		if(cmd_status == 1){ // 10 second timeout to open a lock 
-			timeout++;
+			timeout = timeout + 1;
 			if(timeout > 10){
-				cmd_status = 0;
 				timeout = 0;
 				if(lock_status == 1){ // after 5s, close a lock again
 					user_close_lock();
+					cmd_status = 0;
 				}
 			}
 		}
-		if((cmd_status == 0) && (pre_lock_status == 0) && (lock_status == 1)){ // if lock is detected, run a motor
+		if((timeout == 0) && (cmd_status == 1) && (pre_lock_status == 0) && (lock_status == 1)){ // if lock is detected, run a motor
 			user_close_lock();
+			cmd_status = 0;
 		}
 
 		pre_lock_status = lock_status;		
 		//check charging
 		
-		if(get_usb_status() == 1){
-			battery_level = battery_sample() * 1.403;
-
-			if(battery_level > 4200){
+		usb_detect = get_usb_status();
+		if( usb_detect == 1){
+			if (bt_connected == 0){
+				battery_level = battery_sample() * 1.403;
+			}
+			if(battery_level > 0x1060){
 				user_set_led(RED_LED1, 0);
-				user_set_led(GREEN_LED2, 1);
+				user_set_led(BLUE_LED3, (led_blink % 2));
+
 			}
 			else{
-				user_set_led(RED_LED1, 1);
+				user_set_led(RED_LED1, (led_blink % 2));
 			}
+			led_blink++;
+			k_sleep(K_MSEC(200));
 		}
 
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
