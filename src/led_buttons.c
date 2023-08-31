@@ -51,6 +51,7 @@ static void button_pressed(const struct device *dev, struct gpio_callback *cb,
 			pressed_key = i;
 		}
 	}
+
 }
 
 uint32_t get_padlock_buttons(void)
@@ -139,7 +140,7 @@ void user_close_lock(void)
 	user_set_led(GREEN_LED2, 1);
 	gpio_pin_set_dt(&padlock_leds[AIN_GPIO], 1);
 	gpio_pin_set_dt(&padlock_leds[BIN_GPIO], 0);
-	k_sleep(K_MSEC(1000));
+	k_sleep(K_MSEC(500));
 	gpio_pin_set_dt(&padlock_leds[AIN_GPIO], 0);
 	user_set_led(GREEN_LED2, 0);
 }
@@ -150,7 +151,7 @@ void user_open_lock(void)
 	user_set_led(GREEN_LED2, 1);
 	gpio_pin_set_dt(&padlock_leds[AIN_GPIO], 0);
 	gpio_pin_set_dt(&padlock_leds[BIN_GPIO], 1);
-	k_sleep(K_MSEC(700));
+	k_sleep(K_MSEC(500));
 	gpio_pin_set_dt(&padlock_leds[BIN_GPIO], 0);
 	user_set_led(GREEN_LED2, 0);
 }

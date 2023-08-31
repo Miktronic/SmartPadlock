@@ -35,27 +35,27 @@
 #define DEVICE_NAME             CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN         (sizeof(DEVICE_NAME) - 1)
 				
-#define RUN_LED_BLINK_INTERVAL  300
+#define RUN_LED_BLINK_INTERVAL  500
 
-#define KEY_ID 1
-
+#define KEY_ID 			1
+#define AUTO_CLOSE_ID	2
 extern bool notify_enabled;
 
-static uint16_t battery_level = 0x00;
-static uint32_t lock_status = 0x00;
-static uint8_t pre_lock_status = 0x00;
-static uint8_t cmd_status = 0x00;
-static uint8_t timeout = 0x00;
-static uint8_t bt_buf[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-static uint8_t key_array[6] = {0x01, 0x02, 0x03, 0x04, 0x01, 0x02};
-static uint8_t xor_array[6] = {0x73, 0x74, 0x65, 0x76, 0x65, 0x65};
+uint16_t battery_level = 0x00;
+uint32_t lock_status = 0x00;
+uint8_t pre_lock_status = 0x00;
+uint8_t cmd_status = 0x00;
+uint8_t timeout = 0x00;
+uint8_t bt_buf[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+uint8_t key_array[6] = {0x01, 0x02, 0x03, 0x04, 0x01, 0x02};
+uint8_t xor_array[6] = {0x73, 0x74, 0x65, 0x76, 0x65, 0x65};
 
 uint8_t input_idx = 0;
 uint8_t key_buf[6] = {0x00};
 
-static uint32_t device_status = 0;
-static uint32_t pre_device_status = 0;
-static struct nvs_fs fs;
+uint32_t device_status = 0;
+uint32_t pre_device_status = 0;
+struct nvs_fs fs;
 
 uint8_t button_input = 0;
 uint8_t bt_connected = 0;
@@ -65,6 +65,7 @@ uint8_t scanned_timeout = 0;
 uint8_t charging = 0;
 uint8_t pressed_key = 0x00;
 uint8_t usb_detect = 0;
+uint8_t auto_closed_en = 0;
 
 #define KEY_LEN			(sizeof(key_array) - 2)
 #define NVS_PARTITION		storage_partition
@@ -77,7 +78,9 @@ static const struct bt_data ad[] = {
 };
 
 static const struct bt_data sd[] = {
-	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_PADLOCK_VAL),
+	BT_DATA_BYTES(BT_DATA_UUID128_ALL,
+		      0x84, 0xaa, 0x60, 0x74, 0x52, 0x8a, 0x8b, 0x86,
+		      0xd3, 0x4c, 0xb7, 0x1d, 0x1d, 0xdc, 0x53, 0x8d),
 };
 
 static void connected(struct bt_conn *conn, uint8_t err)
@@ -237,6 +240,8 @@ void button_scan(void)
 		}
 		else{
 			user_set_led(RED_LED1, 1);
+			k_sleep(K_MSEC(300));
+			user_set_led(RED_LED1, 0);
 		}
 		input_idx = 0;
 		button_input = 0;
@@ -250,6 +255,7 @@ void button_scan(void)
 
 	lock_status =  get_lock_status();
 }
+
 int main(void)
 {
 	int err;
@@ -263,6 +269,13 @@ int main(void)
 		printk("Id: %d, Address: %s\n", KEY_ID, key_array);
 	} else   {/* item was not found, add it */
 		(void)nvs_write(&fs, KEY_ID, &key_array, strlen(key_array));
+	}
+
+	err = nvs_read(&fs, AUTO_CLOSE_ID, &auto_closed_en, sizeof(auto_closed_en));
+	if (err > 0) { /* item was found, show it */
+		printk("Id: %d, Address: %s\n", AUTO_CLOSE_ID, auto_closed_en);
+	} else   {/* item was not found, add it */
+		(void)nvs_write(&fs, AUTO_CLOSE_ID, &auto_closed_en, strlen(auto_closed_en));
 	}
 
 	user_leds_init();
@@ -340,7 +353,7 @@ int main(void)
 				bt_buf[7] = 0x00;
 			}
 			//If updating the key...
-			if((bt_buf[0] == 0x55) && (bt_buf[7] == 0xBB)){
+			else if((bt_buf[0] == 0x55) && (bt_buf[7] == 0xBB)){
 
 				bt_buf[1] = bt_buf[1] ^ xor_array[0];
 				bt_buf[2] = bt_buf[2] ^ xor_array[1];
@@ -373,6 +386,32 @@ int main(void)
 				bt_buf[6] = 0x00;
 				bt_buf[7] = 0x00;
 			}
+			else if ((bt_buf[0] == 0x55) && (bt_buf[7] == 0xCC)){
+				auto_closed_en = bt_buf[6];
+
+				(void)nvs_write(&fs, AUTO_CLOSE_ID, &auto_closed_en, strlen(auto_closed_en));
+			}
+			else if((bt_buf[0] == 0x55) && (bt_buf[7] == 0xAB) && (auto_closed_en == 1))
+			{
+				if ((bt_buf[1] == key_array[0]) && (bt_buf[2] == key_array[1]) && (bt_buf[3] == key_array[2]) && 
+					(bt_buf[4] == key_array[3]) && (bt_buf[5] == key_array[4]) && (bt_buf[6] == key_array[5]))
+				{
+					user_close_lock();
+					cmd_status = 0;
+				}
+				else{
+					user_set_led(RED_LED1, 1);
+				}
+				bt_buf[0] = 0x00;
+				bt_buf[1] = 0x00;
+				bt_buf[2] = 0x00;
+				bt_buf[3] = 0x00;
+				bt_buf[4] = 0x00;
+				bt_buf[5] = 0x00;
+				bt_buf[6] = 0x00;
+				bt_buf[7] = 0x00;
+			}
+			
 
 			// update the lock status
 			battery_level = battery_sample() * 1.403;
@@ -388,15 +427,15 @@ int main(void)
 		// if open command...
 		if(cmd_status == 1){ // 10 second timeout to open a lock 
 			timeout = timeout + 1;
-			if(timeout > 10){
+			if(timeout > 5){
 				timeout = 0;
-				if(lock_status == 1){ // after 5s, close a lock again
+				if((lock_status == 1) && (auto_closed_en == 0)){ // after 5s, close a lock again
 					user_close_lock();
 					cmd_status = 0;
 				}
 			}
 		}
-		if((timeout == 0) && (cmd_status == 1) && (pre_lock_status == 0) && (lock_status == 1)){ // if lock is detected, run a motor
+		if((timeout == 0) && (cmd_status == 1) && (auto_closed_en == 0) && (pre_lock_status == 0) && (lock_status == 1)){ // if lock is detected, run a motor
 			user_close_lock();
 			cmd_status = 0;
 		}
@@ -410,15 +449,12 @@ int main(void)
 				battery_level = battery_sample() * 1.403;
 			}
 			if(battery_level > 0x1060){
-				user_set_led(RED_LED1, 0);
-				user_set_led(BLUE_LED3, (led_blink % 2));
-
+				user_set_led(WHITE_LED4, (led_blink % 2));
 			}
 			else{
-				user_set_led(RED_LED1, (led_blink % 2));
+				user_set_led(WHITE_LED4, 1);
 			}
 			led_blink++;
-			k_sleep(K_MSEC(200));
 		}
 
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
